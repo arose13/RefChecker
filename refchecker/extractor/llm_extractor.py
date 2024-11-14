@@ -11,8 +11,8 @@ class LLMExtractor(ExtractorBase):
     def __init__(
         self, 
         claim_format: str = 'triplet',
-        model: str = 'bedrock/anthropic.claude-3-sonnet-20240229-v1:0',
-        batch_size: int = 16,
+        model: str = 'meta-llama/Meta-Llama-3-8B-Instruct',
+        batch_size: int = 4,
         api_base: str = None
     ) -> None:
         super().__init__(claim_format)

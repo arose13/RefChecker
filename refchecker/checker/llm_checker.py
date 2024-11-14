@@ -11,7 +11,7 @@ from .checker_prompts import *
 class LLMChecker(CheckerBase):
     def __init__(
         self,
-        model: str = 'bedrock/anthropic.claude-3-sonnet-20240229-v1:0',
+        model: str = 'meta-llama/Meta-Llama-3-8B-Instruct',
         batch_size: int = 16,
         api_base: str = None
     ) -> None:
@@ -87,7 +87,7 @@ class LLMChecker(CheckerBase):
             prompt_template = JOINT_CHECKING_PROMPT_Q
             
             prompt_list = []
-            prompt_ids = [] # for setting the limit of max num of claims
+            prompt_ids = []  # for setting the limit of max num of claims
             claim_nums = []
             p_id = 0
             for claims_per_batch, references_per_batch, question_per_batch in zip(claims, references, questions):
@@ -98,21 +98,21 @@ class LLMChecker(CheckerBase):
                     references_per_batch = [references_per_batch]
                 
                 for ref in references_per_batch:
-                    _claim_cnt = 0
+                    _claim_count = 0
                     claims_text = ''
                     
                     for _ci, c in enumerate(claims_per_batch):
                         claims_text += f'("{c[0]}", "{c[1]}", "{c[2]}")\n'
-                        _claim_cnt += 1
-                        if _claim_cnt >= joint_check_num or _ci == len(claims_per_batch) - 1:
+                        _claim_count += 1
+                        if _claim_count >= joint_check_num or _ci == len(claims_per_batch) - 1:
                             prompt = prompt_template.replace('[QUESTION]', question_per_batch)
                             prompt = prompt.replace('[REFERENCE]', ref)
                             prompt = prompt.replace('[CLAIMS]', claims_text.strip())
                             prompt_list.append(prompt)
                             
                             prompt_ids.append(p_id)
-                            claim_nums.append(_claim_cnt)
-                            _claim_cnt = 0
+                            claim_nums.append(_claim_count)
+                            _claim_count = 0
                             claims_text = ''
                             
                     p_id += 1

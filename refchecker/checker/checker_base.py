@@ -82,7 +82,7 @@ class CheckerBase:
         """
         assert len(batch_claims) == len(batch_references)
         if batch_questions is None:
-            batch_questions = [None] * len(batch_claims)
+            batch_questions = ['None'] * len(batch_claims)
         
         # check whether the claims or references are empty
         valid_batch_claims = []

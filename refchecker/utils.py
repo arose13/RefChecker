@@ -1,15 +1,6 @@
-import time
-import json
-import os
-
 import spacy
-from openai.types import Completion as OpenAICompletion
-from openai import RateLimitError as OpenAIRateLimitError
-from openai import APIError as OpenAIAPIError
-from openai import Timeout as OpenAITimeout
-
-from litellm import batch_completion
-from litellm.types.utils import ModelResponse
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # Setup spaCy NLP
 nlp = None
@@ -56,20 +47,15 @@ def split_text(text, segment_len=200):
 
 
 def get_model_batch_response(
-        prompts,
-        model='bedrock/anthropic.claude-3-sonnet-20240229-v1:0',
-        temperature=0,
-        n_choices=1,
-        max_new_tokens=500,
-        api_base=None,
-        sagemaker_client=None,
-        sagemaker_params=None,
-        sagemaker_get_response_func=None,
-        custom_llm_api_func=None,
-        **kwargs
+    prompts: list[str],
+    model: str,
+    temperature=0,
+    n_choices=1, 
+    max_new_tokens=500,
+    **kwargs
 ):
     """
-    Get batch generation results with given prompts.
+    Get batch generation results with given prompts using HuggingFace Transformers.
 
     Parameters
     ----------
@@ -79,7 +65,7 @@ def get_model_batch_response(
         The generation temperature, use greedy decoding when setting
         temperature=0, defaults to 0.
     model : str, optional
-        The model for generation, defaults to 'bedrock/anthropic.claude-3-sonnet-20240229-v1:0'.
+        The model name from HuggingFace Hub, defaults to 'gpt2'.
     n_choices : int, optional
         How many samples to return for each prompt input, defaults to 1.
     max_new_tokens : int, optional
@@ -92,89 +78,55 @@ def get_model_batch_response(
     """
     if not prompts or len(prompts) == 0:
         raise ValueError("Invalid input.")
+
+    tokenizer = AutoTokenizer.from_pretrained(model)
+    model = AutoModelForCausalLM.from_pretrained(model)
     
-    if sagemaker_client is not None:
-        parameters = {
-            "max_new_tokens": max_new_tokens,
-            "temperature": temperature
-        }
-        if sagemaker_params is not None:
-            for k, v in sagemaker_params.items():
-                if k in parameters:
-                    parameters[k] = v
-        response_list = []
-        for prompt in prompts:
-            r = sagemaker_client.invoke_endpoint(
-                EndpointName=model,
-                Body=json.dumps(
-                    {
-                        "inputs": prompt,
-                        "parameters": parameters,
-                    }
-                ),
-                ContentType="application/json",
-            )
-            if sagemaker_get_response_func is not None:
-                response = sagemaker_get_response_func(r)
-            else:
-                r = json.loads(r['Body'].read().decode('utf8'))
-                response = r['outputs'][0]
-            response_list.append(response)
-        return response_list
+    if torch.cuda.is_available():
+        model = model.to('cuda')
+
+    response_list = []
     
-    elif custom_llm_api_func is not None:
-        return custom_llm_api_func(prompts)
-    else:
-        message_list = []
-        for prompt in prompts:
-            if len(prompt) == 0:
-                raise ValueError("Invalid prompt.")
-            if isinstance(prompt, str):
-                messages = [{
-                    'role': 'user',
-                    'content': prompt
-                }]
-            elif isinstance(prompt, list):
-                messages = prompt
-            else:
-                raise ValueError("Invalid prompt type.")
-            message_list.append(messages)
-        import litellm
-        litellm.suppress_debug_info = True
-        # litellm.drop_params=True
-        while True:
-            responses = batch_completion(
-                model=model,
-                messages=message_list,
-                temperature=temperature,
-                n=n_choices,
-                max_tokens=max_new_tokens,
-                api_base=api_base,
-                max_workers=None,
-                **kwargs
-            )
-            try:
-                assert all([isinstance(r, ModelResponse) for r in responses])
-                if n_choices == 1:
-                    response_list = [r.choices[0].message.content for r in responses]
-                else:
-                    response_list = [[res.message.content for res in r.choices] for r in responses]
-                
-                assert all([r is not None for r in response_list])
-                return response_list
-            except:
-                exception = None
-                for e in responses:
-                    if isinstance(e, ModelResponse):
-                        continue
-                    elif isinstance(e, OpenAIRateLimitError) or isinstance(e, OpenAIAPIError) or isinstance(e, OpenAITimeout):
-                        exception = e
-                        break
-                    else:
-                        print('Exit with the following error:')
-                        print(e)
-                        return None
-                
-                print(f"{exception} [sleep 10 seconds]")
-                time.sleep(10)
-                continue
+    for prompt in prompts:
+        if len(prompt) == 0:
+            raise ValueError("Invalid prompt.")
+            
+        # Handle both string and message list formats
+        if isinstance(prompt, str):
+            input_text = prompt
+        elif isinstance(prompt, list):
+            # Concatenate messages into a single string
+            input_text = " ".join([m['content'] for m in prompt])
+        else:
+            raise ValueError("Invalid prompt type.")
+
+        # Tokenize input
+        inputs = tokenizer(input_text, return_tensors="pt")
+        if torch.cuda.is_available():
+            inputs = inputs.to('cuda')
+
+        # Generate multiple choices if requested
+        outputs = []
+        for _ in range(n_choices):
+            with torch.inference_mode():
+                output = model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature if temperature > 0 else 1.0,
+                    do_sample=temperature > 0,
+                    num_return_sequences=1,
+                    pad_token_id=tokenizer.eos_token_id
+                )
+            
+            # Decode and clean up the generated text
+            generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
+            # Remove the input prompt from the generated text
+            response = generated_text[len(input_text):].strip()
+            outputs.append(response)
+        
+        if n_choices == 1:
+            response_list.append(outputs[0])
+        else:
+            response_list.append(outputs)
+
+    return response_list
